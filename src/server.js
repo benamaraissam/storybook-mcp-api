@@ -704,6 +704,14 @@ async function startServer(config) {
       target: storybookUrl,
       changeOrigin: true,
       ws: true,
+      // Filter: only proxy requests that are NOT our API/MCP routes
+      pathFilter: (path, req) => {
+        // Don't proxy our API routes
+        if (path.startsWith('/mcp') || path.startsWith('/sse') || path.startsWith('/api')) {
+          return false;
+        }
+        return true;
+      },
       onError: (err, req, res) => {
         if (res.writeHead) {
           res.writeHead(503, { 'Content-Type': 'text/html' });
