@@ -475,8 +475,10 @@ function createApp(config) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.flushHeaders();
 
-    // Send endpoint event with messages URL
-    const messagesUrl = `/sse/messages?sessionId=${sessionId}`;
+    // Send endpoint event with absolute messages URL
+    const protocol = req.protocol || 'http';
+    const host = req.get('host') || `localhost:${config.port || 6006}`;
+    const messagesUrl = `${protocol}://${host}/sse/messages?sessionId=${sessionId}`;
     res.write(`event: endpoint\ndata: ${messagesUrl}\n\n`);
 
     // Store session
@@ -500,10 +502,19 @@ function createApp(config) {
   // POST /sse/messages - Handle SSE messages
   app.post('/sse/messages', async (req, res) => {
     const { sessionId } = req.query;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Missing sessionId parameter' });
+    }
+    
     const session = sseSessions.get(sessionId);
 
     if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
+      return res.status(404).json({ 
+        error: 'Session not found', 
+        hint: 'The SSE session may have expired or disconnected. Please reconnect to /sse',
+        activeSessions: sseSessions.size
+      });
     }
 
     try {
