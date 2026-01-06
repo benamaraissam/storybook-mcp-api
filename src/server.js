@@ -768,7 +768,8 @@ async function startServer(config) {
   }
 
   return new Promise((resolve) => {
-    const server = app.listen(port, async () => {
+    // Bind to 0.0.0.0 to accept connections from all interfaces (localhost, hostname, IP)
+    const server = app.listen(port, '0.0.0.0', async () => {
       console.log('');
       console.log(chalk.blue('═══════════════════════════════════════════════════════════'));
       console.log(chalk.blue('  ⏳ Server started, waiting for Storybook...'));
