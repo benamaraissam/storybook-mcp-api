@@ -1,15 +1,22 @@
-# Storybook MCP API
+# storybook-mcp-api
+
+[![npm version](https://img.shields.io/npm/v/storybook-mcp-api.svg)](https://www.npmjs.com/package/storybook-mcp-api)
+[![npm downloads](https://img.shields.io/npm/dm/storybook-mcp-api.svg)](https://www.npmjs.com/package/storybook-mcp-api)
+[![license](https://img.shields.io/npm/l/storybook-mcp-api.svg)](https://github.com/benamaraissam/storybook-mcp-api/blob/main/LICENSE)
+[![GitHub](https://img.shields.io/github/stars/benamaraissam/storybook-mcp-api?style=social)](https://github.com/benamaraissam/storybook-mcp-api)
 
 **Unified Storybook server with REST API + MCP protocol on a single port**
 
 Access your Storybook stories via REST API endpoints or MCP (Model Context Protocol) for AI assistants - all from one server!
 
+📦 **[View on npm](https://www.npmjs.com/package/storybook-mcp-api)** | 🐙 **[View on GitHub](https://github.com/benamaraissam/storybook-mcp-api)**
+
 ## Features
 
 - 🚀 **Single Port** - REST API and MCP on the same server
 - 📚 **REST API** - `/api/*` endpoints for HTTP clients
-- 🤖 **MCP Protocol** - `/mcp` for AI assistant integration
-- 🔄 **SSE Support** - `/mcp/sse` for Server-Sent Events transport
+- 🤖 **MCP Protocol** - `/mcp` and `/sse` for AI assistant integration
+- 🔄 **SSE Support** - Server-Sent Events transport for real-time communication
 - 📖 **Full Documentation** - Component docs, code examples, usage snippets
 - 🎯 **Framework Support** - Angular, React, Vue, Svelte, Web Components
 - 📦 **Storybook 8/9/10** - Works with latest Storybook versions
@@ -17,18 +24,35 @@ Access your Storybook stories via REST API endpoints or MCP (Model Context Proto
 ## Installation
 
 ```bash
-npm install storybook-mcp-api
+# Using npx (no installation required)
+npx storybook-mcp-api
+
+# Or install globally
+npm install -g storybook-mcp-api
+
+# Or as a dev dependency
+npm install --save-dev storybook-mcp-api
 ```
 
 ## Quick Start
 
-```bash
-# In your Storybook project directory
-npx storybook-mcp-api
+Navigate to your Storybook project and run:
 
-# Or with options
-npx storybook-mcp-api --port 6006
+```bash
+npx storybook-mcp-api
+# or shorter alias
+npx sb-mcp-api
 ```
+
+This will:
+1. Start Storybook on an internal port
+2. Start the API server on port 6006
+3. Proxy Storybook through the same port
+
+Access your stories at:
+- **Storybook UI**: http://localhost:6006
+- **REST API**: http://localhost:6006/api
+- **MCP Protocol**: http://localhost:6006/mcp or http://localhost:6006/sse
 
 ## Endpoints
 
@@ -44,18 +68,29 @@ npx storybook-mcp-api --port 6006
 
 ### MCP Protocol
 
-| Endpoint | Transport | Description |
-|----------|-----------|-------------|
-| `POST /mcp` | Streamable HTTP | JSON-RPC requests |
-| `GET /mcp` | - | Server info (discovery) |
-| `GET /sse` | SSE | Server-Sent Events connection |
-| `POST /sse/messages` | SSE | Send messages to SSE session |
+#### Streamable HTTP Transport (`/mcp`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/mcp` | `POST` | JSON-RPC requests (recommended) |
+| `/mcp` | `GET` | Server info (discovery) |
+
+#### SSE Transport (`/sse`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sse` | `GET` | SSE connection (establishes session) |
+| `/sse` | `POST` | Send messages (with or without sessionId) |
+| `/sse/messages` | `POST` | Send messages to SSE session |
 
 ### MCP Tools
 
 - **list_stories** - List all available stories
+  - Optional: `kind` parameter to filter by category
 - **get_story** - Get story details
+  - Required: `storyId` parameter
 - **get_story_docs** - Get full documentation with code examples
+  - Required: `storyId` parameter
 
 ## Usage Examples
 
@@ -91,29 +126,47 @@ curl -X POST http://localhost:6006/mcp \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_stories","arguments":{}}}'
 ```
 
-### Cursor IDE Configuration
+### Cursor IDE / Claude Desktop Configuration
 
-Add to your Cursor MCP settings:
+Add to your MCP settings (usually `~/.cursor/mcp.json` or `~/.config/claude/mcp.json`):
 
+**Option 1: Streamable HTTP (Recommended)**
 ```json
 {
   "mcpServers": {
-    "storybook-mcp-api": {
+    "storybook": {
+      "url": "http://localhost:6006/mcp"
+    }
+  }
+}
+```
+
+**Option 2: SSE Transport**
+```json
+{
+  "mcpServers": {
+    "storybook": {
       "url": "http://localhost:6006/sse"
     }
   }
 }
 ```
 
+Both transports work, but Streamable HTTP (`/mcp`) is more reliable and stateless.
+
 ## CLI Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-p, --port <number>` | Server port | `6006` |
-| `-s, --storybook-port <number>` | Internal Storybook port | `6010` |
-| `--no-proxy` | API only mode | - |
-| `--storybook-url <url>` | External Storybook URL | - |
-| `-d, --dir <path>` | Project directory | Current dir |
+```bash
+npx storybook-mcp-api [options]
+
+Options:
+  -p, --port <number>          Port for the server (default: 6006)
+  -s, --storybook-port <number> Internal Storybook port (default: 6010)
+  --no-proxy                    Run API only (requires Storybook running separately)
+  --storybook-url <url>         URL of existing Storybook instance
+  -d, --dir <path>              Project directory (default: current directory)
+  -h, --help                    Display help
+```
 
 ## Programmatic Usage
 
@@ -148,10 +201,47 @@ npm run test:sb10
 
 ## Examples
 
-The `examples/` directory contains test projects for:
-- **test-sb8** - Angular project with Storybook 8
-- **test-sb9** - Angular project with Storybook 9
-- **test-sb10** - Angular project with Storybook 10
+### Run API Only (Storybook already running)
+
+```bash
+# If Storybook is running on port 6006
+npx storybook-mcp-api --no-proxy --storybook-url http://localhost:6006 --port 3000
+```
+
+### Custom Ports
+
+```bash
+npx storybook-mcp-api --port 8080 --storybook-port 9000
+```
+
+## Supported Frameworks
+
+- ✅ Angular
+- ✅ React
+- ✅ Vue
+- ✅ Svelte
+- ✅ Web Components
+- ✅ Any Storybook project
+
+## Supported Storybook Versions
+
+- ✅ Storybook 8.x (tested with Angular 17)
+- ✅ Storybook 9.x (tested with Angular 18)
+- ✅ Storybook 10.x (tested with Angular 21)
+
+## Example Projects
+
+Check out the [examples](https://github.com/benamaraissam/storybook-mcp-api/tree/main/examples) folder for working projects:
+- `test-sb8` - Angular 17 + Storybook 8
+- `test-sb9` - Angular 18 + Storybook 9
+- `test-sb10` - Angular 21 + Storybook 10
+
+To run an example:
+```bash
+cd examples/test-sb8
+npm install
+npx storybook-mcp-api
+```
 
 ## License
 
