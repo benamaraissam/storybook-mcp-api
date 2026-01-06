@@ -46,10 +46,10 @@ npx storybook-mcp-api --port 6006
 
 | Endpoint | Transport | Description |
 |----------|-----------|-------------|
-| `GET /mcp` | - | Server info |
-| `POST /mcp` | HTTP Stream | JSON-RPC requests |
-| `GET /mcp/sse` | SSE | Server-Sent Events |
-| `GET /sse` | SSE | Alias for /mcp/sse |
+| `POST /mcp` | Streamable HTTP | JSON-RPC requests |
+| `GET /mcp` | - | Server info (discovery) |
+| `GET /sse` | SSE | Server-Sent Events connection |
+| `POST /sse/messages` | SSE | Send messages to SSE session |
 
 ### MCP Tools
 

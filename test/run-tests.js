@@ -166,7 +166,7 @@ const mcpTests = [
     assertEqual(res.body.name, 'storybook-mcp-api', 'Should return correct name');
     assertContains(res.body, 'protocolVersion', 'Should have protocol version');
     assertContains(res.body, 'tools', 'Should have tools list');
-    assertContains(res.body, 'transports', 'Should have transports info');
+    assertEqual(res.body.transport, 'streamable-http', 'Should indicate streamable-http transport');
   }),
 
   test('POST /mcp initialize request', async () => {
@@ -304,14 +304,9 @@ const mcpTests = [
 // ============================================
 
 const sseTests = [
-  test('GET /sse redirects to /mcp/sse', async () => {
-    const res = await request({ path: '/sse' });
-    assert(res.status === 302 || res.status === 200, 'Should redirect or serve SSE');
-  }),
-
-  test('GET /mcp/sse returns SSE stream', async () => {
+  test('GET /sse returns SSE stream', async () => {
     return new Promise((resolve, reject) => {
-      const url = new URL('/mcp/sse', BASE_URL);
+      const url = new URL('/sse', BASE_URL);
       const req = http.get(url, (res) => {
         assertEqual(res.statusCode, 200, 'Status should be 200');
         assertEqual(res.headers['content-type'], 'text/event-stream', 'Should be event-stream');
@@ -320,6 +315,8 @@ const sseTests = [
         res.on('data', chunk => {
           data += chunk.toString();
           if (data.includes('event: endpoint')) {
+            // Verify it points to /sse/messages
+            assert(data.includes('/sse/messages'), 'Should point to /sse/messages endpoint');
             req.destroy();
             resolve();
           }

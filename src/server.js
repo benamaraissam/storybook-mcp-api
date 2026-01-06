@@ -3,7 +3,8 @@
  * 
  * Unified server exposing Storybook stories via:
  * - REST API at /api/*
- * - MCP protocol at /mcp (HTTP Stream) or /sse (Server-Sent Events)
+ * - MCP Streamable HTTP at /mcp
+ * - MCP SSE at /sse
  * 
  * Supports Storybook 8, 9, and 10
  */
@@ -238,20 +239,16 @@ function createToolHandlers(config) {
 }
 
 /**
- * MCP Protocol Implementation - Embedded in Express
+ * MCP Protocol Handler
  */
-function createMCPRouter(config) {
-  const router = express.Router();
+function createMCPHandler(config) {
   const handlers = createToolHandlers(config);
   const framework = detectFramework(config.projectDir);
-
-  // Store active SSE sessions
-  const sseSessions = new Map();
 
   // MCP Server Info
   const serverInfo = {
     name: 'storybook-mcp-api',
-    version: '1.0.0',
+    version: '1.1.0',
     protocolVersion: '2024-11-05',
   };
 
@@ -304,7 +301,7 @@ function createMCPRouter(config) {
   /**
    * Handle MCP JSON-RPC request
    */
-  async function handleMCPRequest(request) {
+  async function handleRequest(request) {
     const { method, params, id } = request;
 
     switch (method) {
@@ -406,10 +403,70 @@ function createMCPRouter(config) {
     }
   }
 
+  return {
+    handleRequest,
+    serverInfo,
+    tools,
+    resources,
+    framework,
+  };
+}
+
+/**
+ * Create and configure the Express app
+ */
+function createApp(config) {
+  const app = express();
+  const { storybookUrl, projectDir, version } = config;
+  const framework = detectFramework(projectDir);
+  const handlers = createToolHandlers(config);
+  const mcpHandler = createMCPHandler(config);
+
+  // Store active SSE sessions
+  const sseSessions = new Map();
+
+  app.use(cors());
+  app.use(express.json());
+
   // ============================================
-  // SSE Transport (/sse endpoint)
+  // MCP Streamable HTTP Transport (/mcp)
   // ============================================
-  router.get('/sse', (req, res) => {
+  
+  // POST /mcp - Handle MCP JSON-RPC requests
+  app.post('/mcp', async (req, res) => {
+    try {
+      const response = await mcpHandler.handleRequest(req.body);
+      res.json(response);
+    } catch (error) {
+      res.status(500).json({
+        jsonrpc: '2.0',
+        id: req.body?.id,
+        error: { code: -32603, message: error.message },
+      });
+    }
+  });
+
+  // GET /mcp - Return server info (for discovery)
+  app.get('/mcp', (req, res) => {
+    res.json({
+      name: mcpHandler.serverInfo.name,
+      version: mcpHandler.serverInfo.version,
+      protocolVersion: mcpHandler.serverInfo.protocolVersion,
+      description: 'Storybook MCP API Server - Streamable HTTP Transport',
+      framework: mcpHandler.framework,
+      transport: 'streamable-http',
+      endpoint: 'POST /mcp',
+      tools: mcpHandler.tools.map(t => ({ name: t.name, description: t.description })),
+      resources: mcpHandler.resources.map(r => ({ uri: r.uri, name: r.name })),
+    });
+  });
+
+  // ============================================
+  // MCP SSE Transport (/sse)
+  // ============================================
+
+  // GET /sse - SSE connection endpoint
+  app.get('/sse', (req, res) => {
     const sessionId = uuidv4();
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -418,8 +475,8 @@ function createMCPRouter(config) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.flushHeaders();
 
-    // Send endpoint event
-    const messagesUrl = `/mcp/messages?sessionId=${sessionId}`;
+    // Send endpoint event with messages URL
+    const messagesUrl = `/sse/messages?sessionId=${sessionId}`;
     res.write(`event: endpoint\ndata: ${messagesUrl}\n\n`);
 
     // Store session
@@ -440,8 +497,8 @@ function createMCPRouter(config) {
     }, 30000);
   });
 
-  // SSE Messages endpoint
-  router.post('/messages', async (req, res) => {
+  // POST /sse/messages - Handle SSE messages
+  app.post('/sse/messages', async (req, res) => {
     const { sessionId } = req.query;
     const session = sseSessions.get(sessionId);
 
@@ -450,7 +507,7 @@ function createMCPRouter(config) {
     }
 
     try {
-      const response = await handleMCPRequest(req.body);
+      const response = await mcpHandler.handleRequest(req.body);
       
       // Send response via SSE
       session.res.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
@@ -462,64 +519,6 @@ function createMCPRouter(config) {
   });
 
   // ============================================
-  // HTTP Stream Transport (/mcp endpoint)
-  // ============================================
-  router.post('/', async (req, res) => {
-    try {
-      const response = await handleMCPRequest(req.body);
-      res.json(response);
-    } catch (error) {
-      res.status(500).json({
-        jsonrpc: '2.0',
-        id: req.body?.id,
-        error: { code: -32603, message: error.message },
-      });
-    }
-  });
-
-  // MCP Info endpoint
-  router.get('/', (req, res) => {
-    res.json({
-      name: serverInfo.name,
-      version: serverInfo.version,
-      protocolVersion: serverInfo.protocolVersion,
-      description: 'Storybook MCP API Server',
-      framework,
-      transports: {
-        httpStream: 'POST /mcp',
-        sse: 'GET /mcp/sse',
-      },
-      tools: tools.map(t => ({ name: t.name, description: t.description })),
-      resources: resources.map(r => ({ uri: r.uri, name: r.name })),
-    });
-  });
-
-  return router;
-}
-
-/**
- * Create and configure the Express app
- */
-function createApp(config) {
-  const app = express();
-  const { storybookUrl, projectDir, version } = config;
-  const framework = detectFramework(projectDir);
-  const handlers = createToolHandlers(config);
-
-  app.use(cors());
-  app.use(express.json());
-
-  // ============================================
-  // MCP Routes (/mcp/*)
-  // ============================================
-  app.use('/mcp', createMCPRouter(config));
-
-  // SSE alias at root level
-  app.get('/sse', (req, res) => {
-    res.redirect('/mcp/sse');
-  });
-
-  // ============================================
   // REST API Routes (/api/*)
   // ============================================
 
@@ -528,7 +527,7 @@ function createApp(config) {
     res.json({
       success: true,
       name: 'Storybook MCP API',
-      version: '1.0.0',
+      version: '1.1.0',
       storybookVersion: version || 'unknown',
       framework,
       endpoints: {
@@ -540,10 +539,10 @@ function createApp(config) {
           'GET /api/stories/kind/:kind': 'Get stories filtered by kind/category',
         },
         mcp: {
+          'POST /mcp': 'MCP Streamable HTTP transport (JSON-RPC)',
           'GET /mcp': 'MCP server info',
-          'POST /mcp': 'MCP HTTP Stream transport (JSON-RPC)',
-          'GET /mcp/sse': 'MCP SSE transport (Server-Sent Events)',
-          'GET /sse': 'Alias for /mcp/sse',
+          'GET /sse': 'MCP SSE transport (Server-Sent Events)',
+          'POST /sse/messages': 'SSE message endpoint',
         },
       },
       examples: {
@@ -767,9 +766,8 @@ async function startServer(config) {
           console.log(`    ${chalk.cyan(`http://localhost:${port}/api/stories`)}`);
           console.log('');
           console.log(`  ${chalk.bold('MCP Protocol:')}`);
-          console.log(`    ${chalk.cyan(`http://localhost:${port}/mcp`)}        ${chalk.dim('(HTTP Stream)')}`);
-          console.log(`    ${chalk.cyan(`http://localhost:${port}/mcp/sse`)}    ${chalk.dim('(SSE)')}`);
-          console.log(`    ${chalk.cyan(`http://localhost:${port}/sse`)}        ${chalk.dim('(SSE alias)')}`);
+          console.log(`    ${chalk.cyan(`http://localhost:${port}/mcp`)}    ${chalk.dim('(Streamable HTTP - POST)')}`);
+          console.log(`    ${chalk.cyan(`http://localhost:${port}/sse`)}    ${chalk.dim('(SSE Transport)')}`);
           console.log('');
           console.log(chalk.dim('  Press Ctrl+C to stop'));
           console.log('');
@@ -782,6 +780,7 @@ async function startServer(config) {
           console.log(`  ${chalk.bold('Server:')}    ${chalk.cyan(`http://localhost:${port}`)}`);
           console.log(`  ${chalk.bold('REST API:')} ${chalk.cyan(`http://localhost:${port}/api`)}`);
           console.log(`  ${chalk.bold('MCP:')}      ${chalk.cyan(`http://localhost:${port}/mcp`)}`);
+          console.log(`  ${chalk.bold('SSE:')}      ${chalk.cyan(`http://localhost:${port}/sse`)}`);
           console.log('');
           console.log(chalk.dim('  The server is running, but Storybook may still be starting.'));
           console.log(chalk.dim('  Press Ctrl+C to stop'));
@@ -798,9 +797,8 @@ async function startServer(config) {
         console.log(`    ${chalk.cyan(`http://localhost:${port}/api/stories`)}`);
         console.log('');
         console.log(`  ${chalk.bold('MCP Protocol:')}`);
-        console.log(`    ${chalk.cyan(`http://localhost:${port}/mcp`)}        ${chalk.dim('(HTTP Stream)')}`);
-        console.log(`    ${chalk.cyan(`http://localhost:${port}/mcp/sse`)}    ${chalk.dim('(SSE)')}`);
-        console.log(`    ${chalk.cyan(`http://localhost:${port}/sse`)}        ${chalk.dim('(SSE alias)')}`);
+        console.log(`    ${chalk.cyan(`http://localhost:${port}/mcp`)}    ${chalk.dim('(Streamable HTTP - POST)')}`);
+        console.log(`    ${chalk.cyan(`http://localhost:${port}/sse`)}    ${chalk.dim('(SSE Transport)')}`);
         console.log('');
         console.log(chalk.dim('  Press Ctrl+C to stop'));
         console.log('');
@@ -828,8 +826,7 @@ async function startServer(config) {
 module.exports = {
   createApp,
   createToolHandlers,
-  createMCPRouter,
+  createMCPHandler,
   startServer,
   startStorybookProcess,
 };
-
