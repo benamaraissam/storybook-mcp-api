@@ -4,14 +4,29 @@
  * Test suite for Storybook MCP API
  * 
  * Tests both REST API and MCP protocol endpoints
+ * Supports unit tests and integration tests with Storybook 8, 9, 10
+ * 
+ * Usage:
+ *   npm test                    # Run unit tests only
+ *   npm test -- --integration   # Run integration tests with examples
+ *   npm test -- --only test-sb8 # Run specific example test
  */
 
 const http = require('http');
 const path = require('path');
-const { spawn } = require('child_process');
+const fs = require('fs');
+const { spawn, execSync } = require('child_process');
+
+// Parse CLI args
+const args = process.argv.slice(2);
+const runIntegration = args.includes('--integration');
+const onlyIndex = args.indexOf('--only');
+const onlyExample = onlyIndex !== -1 ? args[onlyIndex + 1] : null;
 
 const TEST_PORT = 6099;
 const BASE_URL = `http://localhost:${TEST_PORT}`;
+const EXAMPLES_DIR = path.join(__dirname, '..', 'examples');
+const TIMEOUT = 120000; // 2 minutes per integration test
 
 // Test results tracking
 let passed = 0;
@@ -23,7 +38,7 @@ const results = [];
  */
 function request(options) {
   return new Promise((resolve, reject) => {
-    const url = new URL(options.path, BASE_URL);
+    const url = new URL(options.path, options.baseUrl || BASE_URL);
     const reqOptions = {
       hostname: url.hostname,
       port: url.port,
@@ -104,6 +119,10 @@ function assertContains(obj, key, message) {
   }
 }
 
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // ============================================
 // REST API Tests
 // ============================================
@@ -121,14 +140,12 @@ const restTests = [
 
   test('GET /api/stories returns stories list', async () => {
     const res = await request({ path: '/api/stories' });
-    // May return 503 if Storybook not running, that's OK for this test
     assert(res.status === 200 || res.status === 503, 'Status should be 200 or 503');
     assertContains(res.body, 'success', 'Should have success field');
   }),
 
   test('GET /api/stories/:storyId handles missing story', async () => {
     const res = await request({ path: '/api/stories/non-existent-story' });
-    // Either 404 (not found) or 503 (Storybook not ready)
     assert(res.status === 404 || res.status === 503, 'Status should be 404 or 503');
   }),
 
@@ -289,7 +306,6 @@ const mcpTests = [
 const sseTests = [
   test('GET /sse redirects to /mcp/sse', async () => {
     const res = await request({ path: '/sse' });
-    // Express redirect returns 302
     assert(res.status === 302 || res.status === 200, 'Should redirect or serve SSE');
   }),
 
@@ -303,14 +319,12 @@ const sseTests = [
         let data = '';
         res.on('data', chunk => {
           data += chunk.toString();
-          // Check for endpoint event
           if (data.includes('event: endpoint')) {
             req.destroy();
             resolve();
           }
         });
 
-        // Timeout after 2 seconds
         setTimeout(() => {
           req.destroy();
           if (data.includes('event: endpoint')) {
@@ -331,14 +345,178 @@ const sseTests = [
 ];
 
 // ============================================
+// Integration Tests with Storybook Examples
+// ============================================
+
+const examples = [
+  { name: 'test-sb8', expectedVersion: 8, port: 6008 },
+  { name: 'test-sb9', expectedVersion: 9, port: 6009 },
+  { name: 'test-sb10', expectedVersion: 10, port: 6010 },
+];
+
+async function testExample(example) {
+  const { name, expectedVersion, port } = example;
+  const exampleDir = path.join(EXAMPLES_DIR, name);
+  
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`Testing: ${name} (Storybook ${expectedVersion})`);
+  console.log(`${'='.repeat(60)}`);
+
+  const result = {
+    name,
+    expectedVersion,
+    actualVersion: null,
+    versionMatch: false,
+    restApiWorking: false,
+    mcpWorking: false,
+    storiesCount: 0,
+    errors: [],
+  };
+
+  // Check if example exists
+  if (!fs.existsSync(exampleDir)) {
+    result.errors.push(`Example directory not found: ${exampleDir}`);
+    return result;
+  }
+
+  // Install dependencies if needed
+  const nodeModules = path.join(exampleDir, 'node_modules');
+  if (!fs.existsSync(nodeModules)) {
+    console.log(`📦 Installing dependencies for ${name}...`);
+    try {
+      execSync('npm install', { cwd: exampleDir, stdio: 'inherit' });
+    } catch (error) {
+      result.errors.push(`Failed to install dependencies: ${error.message}`);
+      return result;
+    }
+  }
+
+  // Start storybook-mcp-api
+  console.log(`🚀 Starting storybook-mcp-api on port ${port}...`);
+  
+  const cliPath = path.join(__dirname, '..', 'src', 'cli.js');
+  const serverProcess = spawn('node', [cliPath, '--port', port.toString(), '--dir', exampleDir], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, FORCE_COLOR: '0' },
+  });
+
+  let serverOutput = '';
+  serverProcess.stdout.on('data', (data) => {
+    serverOutput += data.toString();
+  });
+  serverProcess.stderr.on('data', (data) => {
+    serverOutput += data.toString();
+  });
+
+  try {
+    console.log('⏳ Waiting for server to start...');
+    let storybookReady = false;
+    const startTime = Date.now();
+    
+    while (!storybookReady && (Date.now() - startTime) < TIMEOUT) {
+      await sleep(10000);
+      
+      // Check for version detection in output
+      const versionMatch = serverOutput.match(/Detected Storybook version:\s*(\d+)/);
+      if (versionMatch && !result.actualVersion) {
+        result.actualVersion = parseInt(versionMatch[1], 10);
+        result.versionMatch = result.actualVersion === expectedVersion;
+        console.log(`✓ Detected version: ${result.actualVersion} (expected: ${expectedVersion})`);
+      }
+
+      // Try to get stories via REST API
+      try {
+        const response = await request({ 
+          path: '/api/stories',
+          baseUrl: `http://localhost:${port}`,
+        });
+        if (response.status === 200 && response.body?.success && response.body?.stories?.length > 0) {
+          storybookReady = true;
+          result.storiesCount = response.body.count || response.body.stories.length;
+          console.log(`✓ Storybook ready - found ${result.storiesCount} stories`);
+        }
+      } catch (e) {
+        console.log('   Waiting for Storybook...');
+      }
+    }
+
+    if (!storybookReady) {
+      result.errors.push('Storybook failed to start within timeout');
+      throw new Error('Server timeout');
+    }
+
+    result.restApiWorking = true;
+    console.log(`✓ REST API working`);
+
+    // Test MCP endpoint
+    console.log('🔌 Testing MCP protocol...');
+    try {
+      const mcpRes = await request({
+        path: '/mcp',
+        baseUrl: `http://localhost:${port}`,
+        method: 'POST',
+        body: {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {
+            name: 'list_stories',
+            arguments: {},
+          },
+        },
+      });
+      
+      if (mcpRes.status === 200 && mcpRes.body?.result?.content) {
+        result.mcpWorking = true;
+        console.log('✓ MCP protocol working');
+      }
+    } catch (error) {
+      result.errors.push(`MCP test failed: ${error.message}`);
+    }
+
+    // Test get_story tool
+    console.log('🛠️  Testing MCP tools...');
+    try {
+      const storyRes = await request({
+        path: '/api/stories/example-button--primary',
+        baseUrl: `http://localhost:${port}`,
+      });
+      
+      if (storyRes.status === 200 && storyRes.body?.success) {
+        console.log(`✓ get_story working - Component: ${storyRes.body.story?.component || 'N/A'}`);
+      }
+    } catch (error) {
+      result.errors.push(`get_story test failed: ${error.message}`);
+    }
+
+  } catch (error) {
+    if (!result.errors.length) {
+      result.errors.push(error.message);
+    }
+  } finally {
+    console.log('🛑 Stopping server...');
+    serverProcess.kill('SIGTERM');
+    
+    try {
+      execSync(`pkill -f "storybook.*${port}" 2>/dev/null || true`, { stdio: 'ignore' });
+      execSync(`pkill -f "ng run.*storybook" 2>/dev/null || true`, { stdio: 'ignore' });
+    } catch (e) {}
+    
+    await sleep(2000);
+  }
+
+  return result;
+}
+
+// ============================================
 // Run Tests
 // ============================================
 
-async function runTests() {
-  console.log('\n🧪 Storybook MCP API Test Suite\n');
+async function runUnitTests() {
+  console.log('\n🧪 Storybook MCP API - Unit Tests\n');
   console.log('='.repeat(50));
 
-  // Start the server
+  // Start the server for unit tests
   console.log('\n📦 Starting test server...\n');
   
   const serverProcess = spawn('node', [
@@ -351,46 +529,117 @@ async function runTests() {
     stdio: 'pipe',
   });
 
-  // Wait for server to start
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await sleep(2000);
 
   try {
-    // Run REST API tests
     console.log('\n📡 REST API Tests\n');
     for (const testFn of restTests) {
       await testFn();
     }
 
-    // Run MCP tests
     console.log('\n🤖 MCP Protocol Tests\n');
     for (const testFn of mcpTests) {
       await testFn();
     }
 
-    // Run SSE tests
     console.log('\n🔄 SSE Transport Tests\n');
     for (const testFn of sseTests) {
       await testFn();
     }
 
   } finally {
-    // Stop the server
     serverProcess.kill();
   }
 
-  // Print summary
   console.log('\n' + '='.repeat(50));
-  console.log(`\n📊 Results: ${passed} passed, ${failed} failed\n`);
+  console.log(`\n📊 Unit Tests: ${passed} passed, ${failed} failed\n`);
 
-  if (failed > 0) {
-    console.log('Failed tests:');
-    results.filter(r => r.status === 'FAIL').forEach(r => {
-      console.log(`  - ${r.name}: ${r.error}`);
-    });
-    process.exit(1);
-  } else {
+  return failed === 0;
+}
+
+async function runIntegrationTests() {
+  console.log('\n\n╔════════════════════════════════════════════════════════════╗');
+  console.log('║      Storybook MCP API - Integration Tests                 ║');
+  console.log('║      Testing with Storybook 8, 9, and 10                   ║');
+  console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+  let examplesToTest = examples;
+  if (onlyExample) {
+    examplesToTest = examples.filter(e => e.name === onlyExample);
+    if (examplesToTest.length === 0) {
+      console.error(`Example not found: ${onlyExample}`);
+      return false;
+    }
+  }
+
+  const integrationResults = [];
+  for (const example of examplesToTest) {
+    const result = await testExample(example);
+    integrationResults.push(result);
+  }
+
+  // Print summary table
+  console.log('\n\n');
+  console.log('╔════════════════════════════════════════════════════════════╗');
+  console.log('║              INTEGRATION TEST SUMMARY                      ║');
+  console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+  console.log('┌─────────────┬─────────┬─────────────┬───────────┬───────────┐');
+  console.log('│ Example     │ Version │ Version OK  │ REST API  │ MCP       │');
+  console.log('├─────────────┼─────────┼─────────────┼───────────┼───────────┤');
+
+  let allPassed = true;
+  for (const r of integrationResults) {
+    const versionStr = r.actualVersion ? `${r.actualVersion}` : 'N/A';
+    const versionOk = r.versionMatch ? '✅' : '❌';
+    const restApiOk = r.restApiWorking ? '✅' : '❌';
+    const mcpOk = r.mcpWorking ? '✅' : '❌';
+    
+    console.log(`│ ${r.name.padEnd(11)} │ ${versionStr.padEnd(7)} │ ${versionOk.padEnd(11)} │ ${restApiOk.padEnd(9)} │ ${mcpOk.padEnd(9)} │`);
+    
+    if (!r.versionMatch || !r.restApiWorking || !r.mcpWorking) {
+      allPassed = false;
+    }
+  }
+
+  console.log('└─────────────┴─────────┴─────────────┴───────────┴───────────┘\n');
+
+  // Print errors if any
+  const failedTests = integrationResults.filter(r => r.errors.length > 0);
+  if (failedTests.length > 0) {
+    console.log('\n❌ Errors:');
+    for (const r of failedTests) {
+      console.log(`\n  ${r.name}:`);
+      for (const error of r.errors) {
+        console.log(`    - ${error}`);
+      }
+    }
+  }
+
+  return allPassed;
+}
+
+async function runTests() {
+  let unitTestsPassed = true;
+  let integrationTestsPassed = true;
+
+  // Always run unit tests first (unless only flag is used for integration)
+  if (!onlyExample) {
+    unitTestsPassed = await runUnitTests();
+  }
+
+  // Run integration tests if --integration flag or --only flag
+  if (runIntegration || onlyExample) {
+    integrationTestsPassed = await runIntegrationTests();
+  }
+
+  console.log('\n');
+  if (unitTestsPassed && integrationTestsPassed) {
     console.log('✅ All tests passed!\n');
     process.exit(0);
+  } else {
+    console.log('❌ Some tests failed!\n');
+    process.exit(1);
   }
 }
 
@@ -398,4 +647,3 @@ runTests().catch(error => {
   console.error('Test runner error:', error);
   process.exit(1);
 });
-

@@ -131,6 +131,28 @@ const config = {
 startServer(config);
 ```
 
+## Testing
+
+```bash
+# Run unit tests
+npm test
+
+# Run integration tests with Storybook 8, 9, 10 examples
+npm run test:integration
+
+# Test specific Storybook version
+npm run test:sb8
+npm run test:sb9
+npm run test:sb10
+```
+
+## Examples
+
+The `examples/` directory contains test projects for:
+- **test-sb8** - Angular project with Storybook 8
+- **test-sb9** - Angular project with Storybook 9
+- **test-sb10** - Angular project with Storybook 10
+
 ## License
 
 MIT

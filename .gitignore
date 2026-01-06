@@ -12,7 +12,18 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Test artifacts
-test/test-*/
+# Environment
+.env
+.env.*
 
+# Build
+coverage/
+dist/
+
+# Example dependencies (keep examples but not their deps)
+examples/*/node_modules/
+examples/*/package-lock.json
+examples/*/.angular/
