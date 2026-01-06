@@ -527,9 +527,25 @@ function createApp(config) {
     }
   }
 
-  // POST /sse - Direct SSE message posting (some MCP clients use this)
+  // POST /sse - Smart endpoint: Streamable HTTP (no sessionId) OR SSE transport (with sessionId)
   app.post('/sse', async (req, res) => {
     const sessionId = req.query.sessionId || req.headers['x-session-id'];
+    
+    // If no sessionId, treat as Streamable HTTP (like /mcp)
+    if (!sessionId) {
+      try {
+        const response = await mcpHandler.handleRequest(req.body);
+        return res.json(response);
+      } catch (error) {
+        return res.status(500).json({
+          jsonrpc: '2.0',
+          id: req.body?.id,
+          error: { code: -32603, message: error.message },
+        });
+      }
+    }
+    
+    // With sessionId, treat as SSE transport
     return handleSSEMessage(req, res, sessionId);
   });
 
