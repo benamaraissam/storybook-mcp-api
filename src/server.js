@@ -478,7 +478,7 @@ function createApp(config) {
     // Send endpoint event with absolute messages URL
     const protocol = req.protocol || 'http';
     const host = req.get('host') || `localhost:${config.port || 6006}`;
-    const messagesUrl = `${protocol}://${host}/sse/messages?sessionId=${sessionId}`;
+    const messagesUrl = `${protocol}://${host}/sse?sessionId=${sessionId}`;
     res.write(`event: endpoint\ndata: ${messagesUrl}\n\n`);
 
     // Store session
@@ -499,10 +499,8 @@ function createApp(config) {
     }, 30000);
   });
 
-  // POST /sse/messages - Handle SSE messages
-  app.post('/sse/messages', async (req, res) => {
-    const { sessionId } = req.query;
-    
+  // Helper function to handle SSE messages
+  async function handleSSEMessage(req, res, sessionId) {
     if (!sessionId) {
       return res.status(400).json({ error: 'Missing sessionId parameter' });
     }
@@ -527,6 +525,18 @@ function createApp(config) {
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
+  }
+
+  // POST /sse - Direct SSE message posting (some MCP clients use this)
+  app.post('/sse', async (req, res) => {
+    const sessionId = req.query.sessionId || req.headers['x-session-id'];
+    return handleSSEMessage(req, res, sessionId);
+  });
+
+  // POST /sse/messages - Handle SSE messages (standard endpoint)
+  app.post('/sse/messages', async (req, res) => {
+    const sessionId = req.query.sessionId;
+    return handleSSEMessage(req, res, sessionId);
   });
 
   // ============================================
