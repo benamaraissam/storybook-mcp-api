@@ -248,6 +248,31 @@ module.exports = {
 
 Generate static JSON API files that can be served by **nginx, Apache, S3, or any CDN** - no Node.js required!
 
+#### Option 1: Integrate into Build (Recommended)
+
+Add to your project's `package.json`:
+
+```json
+{
+  "scripts": {
+    "build-storybook": "storybook build",
+    "postbuild-storybook": "storybook-mcp-api --generate-api"
+  },
+  "devDependencies": {
+    "storybook-mcp-api": "^1.4.0"
+  }
+}
+```
+
+Then just run:
+```bash
+npm run build-storybook
+```
+
+The API files are generated automatically after the build!
+
+#### Option 2: Manual Generation
+
 ```bash
 # 1. Build Storybook
 npx storybook build
