@@ -162,10 +162,76 @@ npx storybook-mcp-api [options]
 Options:
   -p, --port <number>          Port for the server (default: 6006)
   -s, --storybook-port <number> Internal Storybook port (default: 6010)
+  --static <path>               Serve a pre-built Storybook directory (production mode)
   --no-proxy                    Run API only (requires Storybook running separately)
   --storybook-url <url>         URL of existing Storybook instance
   -d, --dir <path>              Project directory (default: current directory)
   -h, --help                    Display help
+```
+
+## Production Deployment
+
+For production, you can serve a pre-built Storybook instead of running it in development mode.
+
+### Build and Serve
+
+```bash
+# 1. Build Storybook
+npx storybook build -o storybook-static
+
+# 2. Serve with storybook-mcp-api
+npx storybook-mcp-api --static ./storybook-static
+```
+
+This will:
+- Serve the static Storybook UI
+- Expose REST API at `/api/*`
+- Expose MCP protocol at `/mcp` and `/sse`
+- No Storybook dev server needed!
+
+### Docker Example
+
+```dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy pre-built Storybook
+COPY storybook-static ./storybook-static
+
+# Install storybook-mcp-api globally
+RUN npm install -g storybook-mcp-api
+
+EXPOSE 6006
+
+CMD ["storybook-mcp-api", "--static", "./storybook-static"]
+```
+
+### PM2 Example
+
+```bash
+# Install PM2 globally
+npm install -g pm2
+
+# Start with PM2
+pm2 start "npx storybook-mcp-api --static ./storybook-static" --name storybook-api
+
+# Or create ecosystem.config.js
+pm2 start ecosystem.config.js
+```
+
+```javascript
+// ecosystem.config.js
+module.exports = {
+  apps: [{
+    name: 'storybook-api',
+    script: 'npx',
+    args: 'storybook-mcp-api --static ./storybook-static --port 6006',
+    env: {
+      NODE_ENV: 'production'
+    }
+  }]
+};
 ```
 
 ## Programmatic Usage

@@ -26,8 +26,29 @@ const { detectFramework } = require('./utils');
  * MCP Tool Handlers - Core business logic shared between REST and MCP
  */
 function createToolHandlers(config) {
-  const { storybookUrl, projectDir } = config;
+  const { storybookUrl, projectDir, staticDir } = config;
   const framework = detectFramework(projectDir);
+
+  /**
+   * Get index.json data - from static file or remote URL
+   */
+  async function getIndexData() {
+    // Static mode: read from local file
+    if (staticDir) {
+      const indexPath = path.join(staticDir, 'index.json');
+      if (fs.existsSync(indexPath)) {
+        return JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+      }
+      throw new Error('index.json not found in static directory');
+    }
+    
+    // Development mode: fetch from Storybook URL
+    const response = await fetch(`${storybookUrl}/index.json`);
+    if (!response.ok) {
+      throw new Error('Storybook is not ready');
+    }
+    return response.json();
+  }
 
   return {
     /**
@@ -35,16 +56,7 @@ function createToolHandlers(config) {
      */
     async listStories(args = {}) {
       try {
-        const response = await fetch(`${storybookUrl}/index.json`);
-        if (!response.ok) {
-          return {
-            success: false,
-            error: 'Storybook is not ready. Please wait...',
-            hint: `Make sure Storybook is running at ${storybookUrl}`,
-          };
-        }
-
-        const data = await response.json();
+        const data = await getIndexData();
         let stories = Object.values(data.entries || {}).map(entry => ({
           id: entry.id,
           name: entry.name,
@@ -65,7 +77,13 @@ function createToolHandlers(config) {
           stories,
         };
       } catch (error) {
-        return { success: false, error: error.message };
+        return { 
+          success: false, 
+          error: error.message,
+          hint: staticDir 
+            ? `Make sure index.json exists in ${staticDir}` 
+            : `Make sure Storybook is running at ${storybookUrl}`,
+        };
       }
     },
 
@@ -75,12 +93,7 @@ function createToolHandlers(config) {
     async getStory(args) {
       try {
         const { storyId } = args;
-        const response = await fetch(`${storybookUrl}/index.json`);
-        if (!response.ok) {
-          return { success: false, error: 'Storybook is not ready' };
-        }
-
-        const data = await response.json();
+        const data = await getIndexData();
         const entry = data.entries?.[storyId];
 
         if (!entry) {
@@ -124,12 +137,7 @@ function createToolHandlers(config) {
     async getStoryDocs(args) {
       try {
         const { storyId } = args;
-        const response = await fetch(`${storybookUrl}/index.json`);
-        if (!response.ok) {
-          return { success: false, error: 'Storybook is not ready' };
-        }
-
-        const data = await response.json();
+        const data = await getIndexData();
         const entry = data.entries?.[storyId];
 
         if (!entry) {
@@ -214,12 +222,7 @@ function createToolHandlers(config) {
     async getStoriesByKind(args) {
       try {
         const { kind } = args;
-        const response = await fetch(`${storybookUrl}/index.json`);
-        if (!response.ok) {
-          return { success: false, error: 'Storybook is not ready' };
-        }
-
-        const data = await response.json();
+        const data = await getIndexData();
         const stories = Object.values(data.entries || {})
           .filter(entry => entry.kind === kind || entry.title === kind)
           .map(entry => ({
@@ -728,12 +731,26 @@ function startStorybookProcess(config) {
  * Start the unified server
  */
 async function startServer(config) {
-  const { port, storybookPort, storybookUrl, projectDir, proxy } = config;
+  const { port, storybookPort, storybookUrl, projectDir, proxy, staticDir } = config;
 
   const app = createApp(config);
   let storybookProcess = null;
 
-  if (proxy) {
+  // Static mode: serve pre-built Storybook files
+  if (staticDir) {
+    console.log(chalk.blue('→') + ` Serving static Storybook from: ${chalk.dim(staticDir)}`);
+    app.use(express.static(staticDir));
+    
+    // Fallback to index.html for SPA routing
+    app.get('*', (req, res, next) => {
+      // Skip API and MCP routes
+      if (req.path.startsWith('/mcp') || req.path.startsWith('/sse') || req.path.startsWith('/api')) {
+        return next();
+      }
+      res.sendFile(path.join(staticDir, 'index.html'));
+    });
+  } else if (proxy) {
+    // Development mode: start and proxy Storybook
     storybookProcess = startStorybookProcess(config);
 
     // Add proxy middleware for all non-API/MCP requests (Storybook UI)
@@ -770,13 +787,38 @@ async function startServer(config) {
   return new Promise((resolve) => {
     // Bind to 0.0.0.0 to accept connections from all interfaces (localhost, hostname, IP)
     const server = app.listen(port, '0.0.0.0', async () => {
+      
+      // Static mode: ready immediately
+      if (staticDir) {
+        console.log('');
+        console.log(chalk.green('═══════════════════════════════════════════════════════════'));
+        console.log(chalk.green('  ✓ Storybook MCP API is ready! (Production Mode)'));
+        console.log(chalk.green('═══════════════════════════════════════════════════════════'));
+        console.log('');
+        console.log(`  ${chalk.bold('Storybook UI:')}    ${chalk.cyan(`http://localhost:${port}`)}`);
+        console.log(`  ${chalk.dim('                  Serving static build from:')} ${staticDir}`);
+        console.log('');
+        console.log(`  ${chalk.bold('REST API:')}`);
+        console.log(`    ${chalk.cyan(`http://localhost:${port}/api`)}`);
+        console.log(`    ${chalk.cyan(`http://localhost:${port}/api/stories`)}`);
+        console.log('');
+        console.log(`  ${chalk.bold('MCP Protocol:')}`);
+        console.log(`    ${chalk.cyan(`http://localhost:${port}/mcp`)}    ${chalk.dim('(Streamable HTTP - POST)')}`);
+        console.log(`    ${chalk.cyan(`http://localhost:${port}/sse`)}    ${chalk.dim('(SSE Transport)')}`);
+        console.log('');
+        console.log(chalk.dim('  Press Ctrl+C to stop'));
+        console.log('');
+        resolve(server);
+        return;
+      }
+      
       console.log('');
       console.log(chalk.blue('═══════════════════════════════════════════════════════════'));
       console.log(chalk.blue('  ⏳ Server started, waiting for Storybook...'));
       console.log(chalk.blue('═══════════════════════════════════════════════════════════'));
       console.log('');
 
-      // Wait for Storybook to be ready
+      // Wait for Storybook to be ready (development mode with proxy)
       if (proxy && storybookProcess) {
         let storybookReady = false;
         const maxWaitTime = 120000;
