@@ -8,7 +8,8 @@
  * Usage:
  *   npx storybook-mcp-api [options]
  *   npx storybook-mcp-api --port 6006
- *   npx storybook-mcp-api --static ./storybook-static  # Production mode
+ *   npx storybook-mcp-api --static                     # Auto-detect from angular.json
+ *   npx storybook-mcp-api --static ./storybook-static  # Explicit path
  */
 
 const { Command } = require('commander');
@@ -17,6 +18,42 @@ const path = require('path');
 const fs = require('fs');
 const { startServer } = require('./server');
 const { detectStorybookVersion, findStorybookConfig, detectFramework } = require('./utils');
+
+/**
+ * Auto-detect Storybook build output directory
+ * Checks angular.json, then common defaults
+ */
+function detectStorybookOutputDir(projectDir) {
+  // Check angular.json for build-storybook outputDir
+  const angularJsonPath = path.join(projectDir, 'angular.json');
+  if (fs.existsSync(angularJsonPath)) {
+    try {
+      const angularJson = JSON.parse(fs.readFileSync(angularJsonPath, 'utf8'));
+      for (const project of Object.values(angularJson.projects || {})) {
+        const buildStorybook = project.architect?.['build-storybook'];
+        if (buildStorybook?.options?.outputDir) {
+          const outputDir = path.join(projectDir, buildStorybook.options.outputDir);
+          if (fs.existsSync(outputDir)) {
+            return { dir: outputDir, source: 'angular.json' };
+          }
+        }
+      }
+    } catch (error) {
+      // Ignore parse errors
+    }
+  }
+  
+  // Check common default directories
+  const defaultDirs = ['storybook-static', 'dist/storybook', 'build/storybook'];
+  for (const dir of defaultDirs) {
+    const fullPath = path.join(projectDir, dir);
+    if (fs.existsSync(fullPath) && fs.existsSync(path.join(fullPath, 'index.json'))) {
+      return { dir: fullPath, source: 'auto-detected' };
+    }
+  }
+  
+  return null;
+}
 
 const program = new Command();
 
@@ -28,7 +65,7 @@ program
   .option('-s, --storybook-port <number>', 'Internal port for Storybook', '6010')
   .option('--no-proxy', 'Run API only (don\'t start/proxy Storybook)')
   .option('--storybook-url <url>', 'URL of running Storybook instance')
-  .option('--static <path>', 'Serve a pre-built Storybook directory (production mode)')
+  .option('--static [path]', 'Serve a pre-built Storybook (auto-detects from angular.json or defaults)')
   .option('-d, --dir <path>', 'Project directory (default: current directory)', process.cwd())
   .action(async (options) => {
     console.log('');
@@ -43,8 +80,25 @@ program
     
     // Check for static mode (production)
     let staticDir = null;
-    if (options.static) {
-      staticDir = path.resolve(options.static);
+    if (options.static !== undefined) {
+      // If path provided, use it; otherwise auto-detect
+      if (typeof options.static === 'string' && options.static !== '') {
+        staticDir = path.resolve(options.static);
+      } else {
+        // Auto-detect from angular.json or defaults
+        const detected = detectStorybookOutputDir(projectDir);
+        if (detected) {
+          staticDir = detected.dir;
+          console.log(chalk.green('✓') + ` Auto-detected Storybook build: ${chalk.bold(staticDir)}`);
+          console.log(chalk.dim(`  Source: ${detected.source}`));
+        } else {
+          console.error(chalk.red('✗') + ' Could not auto-detect Storybook build directory');
+          console.error(chalk.dim('  Try one of:'));
+          console.error(chalk.dim('    npx storybook build -o storybook-static'));
+          console.error(chalk.dim('    npx storybook-mcp-api --static ./your-output-dir'));
+          process.exit(1);
+        }
+      }
       
       // Verify the static directory exists
       if (!fs.existsSync(staticDir)) {

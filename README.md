@@ -162,7 +162,7 @@ npx storybook-mcp-api [options]
 Options:
   -p, --port <number>          Port for the server (default: 6006)
   -s, --storybook-port <number> Internal Storybook port (default: 6010)
-  --static <path>               Serve a pre-built Storybook directory (production mode)
+  --static [path]               Production mode: serve pre-built Storybook (auto-detects if no path)
   --no-proxy                    Run API only (requires Storybook running separately)
   --storybook-url <url>         URL of existing Storybook instance
   -d, --dir <path>              Project directory (default: current directory)
@@ -177,10 +177,19 @@ For production, you can serve a pre-built Storybook instead of running it in dev
 
 ```bash
 # 1. Build Storybook
-npx storybook build -o storybook-static
+npx storybook build
 
-# 2. Serve with storybook-mcp-api
-npx storybook-mcp-api --static ./storybook-static
+# 2. Serve with storybook-mcp-api (auto-detects output directory)
+npx storybook-mcp-api --static
+```
+
+The `--static` flag auto-detects the output directory from:
+1. `angular.json` → `build-storybook.options.outputDir`
+2. Common defaults: `storybook-static`, `dist/storybook`, `build/storybook`
+
+You can also specify explicitly:
+```bash
+npx storybook-mcp-api --static ./custom-output-dir
 ```
 
 This will:
