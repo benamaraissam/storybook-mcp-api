@@ -10,13 +10,14 @@
  *   npx storybook-mcp-api --port 6006
  *   npx storybook-mcp-api --static                     # Auto-detect from angular.json
  *   npx storybook-mcp-api --static ./storybook-static  # Explicit path
+ *   npx storybook-mcp-api --generate-api              # Generate static API files
  */
 
 const { Command } = require('commander');
 const chalk = require('chalk');
 const path = require('path');
 const fs = require('fs');
-const { startServer } = require('./server');
+const { startServer, createToolHandlers } = require('./server');
 const { detectStorybookVersion, findStorybookConfig, detectFramework } = require('./utils');
 
 /**
@@ -55,6 +56,140 @@ function detectStorybookOutputDir(projectDir) {
   return null;
 }
 
+/**
+ * Generate static API JSON files inside Storybook build
+ * This allows serving everything via nginx/CDN without a Node.js server
+ */
+async function generateStaticApi(staticDir, projectDir) {
+  const indexJsonPath = path.join(staticDir, 'index.json');
+  if (!fs.existsSync(indexJsonPath)) {
+    throw new Error(`No index.json found in ${staticDir}`);
+  }
+
+  // Create api directory
+  const apiDir = path.join(staticDir, 'api');
+  if (!fs.existsSync(apiDir)) {
+    fs.mkdirSync(apiDir, { recursive: true });
+  }
+
+  // Read index.json
+  const indexData = JSON.parse(fs.readFileSync(indexJsonPath, 'utf8'));
+  const entries = indexData.entries || {};
+  const stories = Object.values(entries);
+
+  // Generate /api/index.json (API info)
+  const apiInfo = {
+    success: true,
+    name: 'Storybook MCP API',
+    version: '1.3.0',
+    mode: 'static',
+    endpoints: {
+      'GET /api': 'This documentation',
+      'GET /api/stories.json': 'Get all stories',
+      'GET /api/stories/{storyId}.json': 'Get story details',
+      'GET /api/docs/{storyId}.json': 'Get story documentation',
+    },
+    note: 'This is a static API. MCP protocol requires a running server.',
+  };
+  fs.writeFileSync(path.join(apiDir, 'index.json'), JSON.stringify(apiInfo, null, 2));
+  console.log(chalk.green('  ✓') + ' Generated /api/index.json');
+
+  // Generate /api/stories.json (all stories)
+  const storiesList = {
+    success: true,
+    count: stories.length,
+    stories: stories.map(entry => ({
+      id: entry.id,
+      name: entry.name,
+      title: entry.title,
+      kind: entry.kind || entry.title,
+      importPath: entry.importPath,
+      tags: entry.tags || [],
+      type: entry.type,
+    })),
+  };
+  fs.writeFileSync(path.join(apiDir, 'stories.json'), JSON.stringify(storiesList, null, 2));
+  console.log(chalk.green('  ✓') + ` Generated /api/stories.json (${stories.length} stories)`);
+
+  // Create stories and docs subdirectories
+  const storiesDir = path.join(apiDir, 'stories');
+  const docsDir = path.join(apiDir, 'docs');
+  if (!fs.existsSync(storiesDir)) fs.mkdirSync(storiesDir, { recursive: true });
+  if (!fs.existsSync(docsDir)) fs.mkdirSync(docsDir, { recursive: true });
+
+  // Generate individual story and docs files
+  let storyCount = 0;
+  let docsCount = 0;
+
+  for (const entry of stories) {
+    const storyId = entry.id;
+    const safeId = storyId.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    // Generate /api/stories/{storyId}.json
+    const storyData = {
+      success: true,
+      story: {
+        id: entry.id,
+        name: entry.name,
+        title: entry.title,
+        kind: entry.kind || entry.title,
+        importPath: entry.importPath,
+        tags: entry.tags || [],
+        type: entry.type,
+      },
+    };
+    fs.writeFileSync(path.join(storiesDir, `${safeId}.json`), JSON.stringify(storyData, null, 2));
+    storyCount++;
+
+    // Generate /api/docs/{storyId}.json
+    const docsData = {
+      success: true,
+      docs: {
+        storyId: entry.id,
+        title: entry.title,
+        name: entry.name,
+        type: entry.type,
+        importPath: entry.importPath,
+      },
+    };
+    fs.writeFileSync(path.join(docsDir, `${safeId}.json`), JSON.stringify(docsData, null, 2));
+    docsCount++;
+  }
+
+  console.log(chalk.green('  ✓') + ` Generated ${storyCount} story files in /api/stories/`);
+  console.log(chalk.green('  ✓') + ` Generated ${docsCount} docs files in /api/docs/`);
+
+  // Generate nginx config example
+  const nginxConfig = `# nginx configuration for static Storybook API
+# Add this to your server block
+
+location /api {
+    alias ${staticDir}/api;
+    default_type application/json;
+    add_header Access-Control-Allow-Origin *;
+    
+    # Rewrite for pretty URLs
+    try_files $uri $uri.json =404;
+}
+
+location /api/stories/ {
+    alias ${staticDir}/api/stories/;
+    default_type application/json;
+    add_header Access-Control-Allow-Origin *;
+}
+
+location /api/docs/ {
+    alias ${staticDir}/api/docs/;
+    default_type application/json;
+    add_header Access-Control-Allow-Origin *;
+}
+`;
+  fs.writeFileSync(path.join(apiDir, 'nginx.conf.example'), nginxConfig);
+  console.log(chalk.green('  ✓') + ' Generated /api/nginx.conf.example');
+
+  return { apiDir, storyCount, docsCount };
+}
+
 const program = new Command();
 
 program
@@ -66,6 +201,7 @@ program
   .option('--no-proxy', 'Run API only (don\'t start/proxy Storybook)')
   .option('--storybook-url <url>', 'URL of running Storybook instance')
   .option('--static [path]', 'Serve a pre-built Storybook (auto-detects from angular.json or defaults)')
+  .option('--generate-api [path]', 'Generate static API JSON files inside Storybook build (no server needed)')
   .option('-d, --dir <path>', 'Project directory (default: current directory)', process.cwd())
   .action(async (options) => {
     console.log('');
@@ -77,6 +213,54 @@ program
 
     const projectDir = options.dir;
     const port = parseInt(options.port, 10);
+    
+    // Check for --generate-api mode (generate static files and exit)
+    if (options.generateApi !== undefined) {
+      let targetDir;
+      
+      if (typeof options.generateApi === 'string' && options.generateApi !== '') {
+        targetDir = path.resolve(options.generateApi);
+      } else {
+        const detected = detectStorybookOutputDir(projectDir);
+        if (detected) {
+          targetDir = detected.dir;
+          console.log(chalk.green('✓') + ` Auto-detected Storybook build: ${chalk.bold(targetDir)}`);
+        } else {
+          console.error(chalk.red('✗') + ' Could not auto-detect Storybook build directory');
+          console.error(chalk.dim('  Build Storybook first: npx storybook build'));
+          process.exit(1);
+        }
+      }
+      
+      console.log('');
+      console.log(chalk.blue('→') + ' Generating static API files...');
+      console.log('');
+      
+      try {
+        const result = await generateStaticApi(targetDir, projectDir);
+        console.log('');
+        console.log(chalk.green('═══════════════════════════════════════════════════════════'));
+        console.log(chalk.green('  ✓ Static API generated successfully!'));
+        console.log(chalk.green('═══════════════════════════════════════════════════════════'));
+        console.log('');
+        console.log(`  ${chalk.bold('Output:')} ${result.apiDir}`);
+        console.log('');
+        console.log(`  ${chalk.bold('Files generated:')}`);
+        console.log(`    • /api/index.json`);
+        console.log(`    • /api/stories.json`);
+        console.log(`    • /api/stories/*.json (${result.storyCount} files)`);
+        console.log(`    • /api/docs/*.json (${result.docsCount} files)`);
+        console.log(`    • /api/nginx.conf.example`);
+        console.log('');
+        console.log(chalk.dim('  You can now serve everything with nginx or any static server.'));
+        console.log(chalk.dim('  See /api/nginx.conf.example for nginx configuration.'));
+        console.log('');
+        process.exit(0);
+      } catch (error) {
+        console.error(chalk.red('✗') + ` Error: ${error.message}`);
+        process.exit(1);
+      }
+    }
     
     // Check for static mode (production)
     let staticDir = null;

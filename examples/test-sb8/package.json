@@ -7,7 +7,9 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "storybook": "ng run test-sb8:storybook",
-    "build-storybook": "ng run test-sb8:build-storybook"
+    "build-storybook": "ng run test-sb8:build-storybook",
+    "build-storybook:prod": "ng run test-sb8:build-storybook && storybook-mcp-api --generate-api",
+    "postbuild-storybook": "storybook-mcp-api --generate-api"
   },
   "private": true,
   "dependencies": {
@@ -36,6 +38,7 @@
     "@storybook/blocks": "^8.6.15",
     "@storybook/test": "^8.6.15",
     "storybook": "^8.6.15",
+    "storybook-mcp-api": "^1.4.0",
     "typescript": "~5.4.2"
   }
 }

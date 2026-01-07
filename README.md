@@ -163,6 +163,7 @@ Options:
   -p, --port <number>          Port for the server (default: 6006)
   -s, --storybook-port <number> Internal Storybook port (default: 6010)
   --static [path]               Production mode: serve pre-built Storybook (auto-detects if no path)
+  --generate-api [path]         Generate static API JSON files (no server needed)
   --no-proxy                    Run API only (requires Storybook running separately)
   --storybook-url <url>         URL of existing Storybook instance
   -d, --dir <path>              Project directory (default: current directory)
@@ -242,6 +243,58 @@ module.exports = {
   }]
 };
 ```
+
+### Fully Static (No Node.js Server)
+
+Generate static JSON API files that can be served by **nginx, Apache, S3, or any CDN** - no Node.js required!
+
+```bash
+# 1. Build Storybook
+npx storybook build
+
+# 2. Generate static API files
+npx storybook-mcp-api --generate-api
+```
+
+This creates JSON files inside your Storybook build:
+```
+storybook-static/
+├── api/
+│   ├── index.json           # API info
+│   ├── stories.json         # All stories
+│   ├── stories/
+│   │   ├── example-button--primary.json
+│   │   └── ...
+│   ├── docs/
+│   │   ├── example-button--primary.json
+│   │   └── ...
+│   └── nginx.conf.example   # nginx config
+├── index.html
+└── ...
+```
+
+**nginx Configuration:**
+
+```nginx
+server {
+    listen 80;
+    root /var/www/storybook-static;
+
+    # Serve Storybook UI
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Serve static API
+    location /api {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin *;
+        try_files $uri $uri.json =404;
+    }
+}
+```
+
+> **Note:** MCP protocol (`/mcp`, `/sse`) requires a running Node.js server. The static API only supports REST endpoints.
 
 ## Programmatic Usage
 
