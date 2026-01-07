@@ -197,11 +197,14 @@ For production, you can serve a pre-built Storybook instead of running it in dev
 Serve pre-built Storybook with full API and MCP support:
 
 ```bash
-# 1. Build Storybook
-npx storybook build
+# 1. Build Storybook (during CI/CD)
+npm run build-storybook
 
-# 2. Serve with storybook-mcp-api (auto-detects output directory)
-npx storybook-mcp-api --static
+# 2. Install globally on production server
+npm install -g storybook-mcp-api
+
+# 3. Run (auto-detects output directory)
+storybook-mcp-api --static
 ```
 
 **Features:**
@@ -216,8 +219,10 @@ npx storybook-mcp-api --static
 
 Or specify explicitly:
 ```bash
-npx storybook-mcp-api --static ./custom-output-dir
+storybook-mcp-api --static ./custom-output-dir
 ```
+
+> ⚠️ **Note:** Avoid using `npx` in production as it downloads packages on every run. Install globally instead.
 
 #### Docker Example
 
@@ -307,7 +312,7 @@ Add to your project's `package.json`:
     "postbuild-storybook": "storybook-mcp-api --generate-api"
   },
   "devDependencies": {
-    "storybook-mcp-api": "^1.4.0"
+    "storybook-mcp-api": "^1.4.3"
   }
 }
 ```
@@ -319,7 +324,9 @@ npm run build-storybook
 
 The API files are generated automatically after the build!
 
-#### Manual Generation
+#### Manual Generation (CI/CD)
+
+For CI/CD pipelines, you can use npx since it runs once during build:
 
 ```bash
 # 1. Build Storybook
@@ -327,6 +334,13 @@ npx storybook build
 
 # 2. Generate static API files (auto-detects build directory)
 npx storybook-mcp-api --generate-api
+```
+
+Or install as dev dependency (faster in CI with caching):
+
+```bash
+npm install --save-dev storybook-mcp-api
+npm run build-storybook && storybook-mcp-api --generate-api
 ```
 
 This creates JSON files inside your Storybook build:
