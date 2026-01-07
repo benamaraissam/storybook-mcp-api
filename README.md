@@ -170,11 +170,31 @@ Options:
   -h, --help                    Display help
 ```
 
+## Deployment Options
+
+Choose the deployment mode that fits your needs:
+
+| Mode | Command | Storybook UI | REST API | MCP Protocol | Server Required |
+|------|---------|--------------|----------|--------------|-----------------|
+| **Development** | `npx storybook-mcp-api` | ✅ Live | ✅ Dynamic | ✅ Full | Node.js |
+| **Static Server** | `--static` | ✅ Built | ✅ Dynamic | ✅ Full | Node.js |
+| **Pure Static** | `--generate-api` | ✅ Built | ✅ JSON files | ❌ None | nginx/CDN only |
+
+### When to use each:
+
+- **Development**: Local development, hot-reload, debugging
+- **Static Server** (`--static`): Production with MCP support, lightweight Node.js
+- **Pure Static** (`--generate-api`): Maximum performance, CDN deployment, no server needed
+
+---
+
 ## Production Deployment
 
 For production, you can serve a pre-built Storybook instead of running it in development mode.
 
-### Build and Serve
+### Option 1: Static Server (Node.js - REST + MCP)
+
+Serve pre-built Storybook with full API and MCP support:
 
 ```bash
 # 1. Build Storybook
@@ -184,22 +204,22 @@ npx storybook build
 npx storybook-mcp-api --static
 ```
 
-The `--static` flag auto-detects the output directory from:
+**Features:**
+- ✅ Storybook UI (pre-built)
+- ✅ REST API (`/api/*`) - dynamic responses
+- ✅ MCP Protocol (`/mcp`, `/sse`) - full support
+- ✅ Lightweight - no Storybook dev server
+
+**Auto-detection:** The `--static` flag auto-detects the output directory from:
 1. `angular.json` → `build-storybook.options.outputDir`
 2. Common defaults: `storybook-static`, `dist/storybook`, `build/storybook`
 
-You can also specify explicitly:
+Or specify explicitly:
 ```bash
 npx storybook-mcp-api --static ./custom-output-dir
 ```
 
-This will:
-- Serve the static Storybook UI
-- Expose REST API at `/api/*`
-- Expose MCP protocol at `/mcp` and `/sse`
-- No Storybook dev server needed!
-
-### Docker Example
+#### Docker Example
 
 ```dockerfile
 FROM node:20-alpine
@@ -217,38 +237,66 @@ EXPOSE 6006
 CMD ["storybook-mcp-api", "--static", "./storybook-static"]
 ```
 
-### PM2 Example
+#### PM2 Example
 
 ```bash
-# Install PM2 globally
-npm install -g pm2
+# Install globally (recommended for production)
+npm install -g storybook-mcp-api pm2
 
 # Start with PM2
-pm2 start "npx storybook-mcp-api --static ./storybook-static" --name storybook-api
+pm2 start storybook-mcp-api --name storybook-api -- --static --port 6006
 
-# Or create ecosystem.config.js
-pm2 start ecosystem.config.js
+# Save and auto-restart on reboot
+pm2 save
+pm2 startup
 ```
 
-```javascript
-// ecosystem.config.js
-module.exports = {
-  apps: [{
-    name: 'storybook-api',
-    script: 'npx',
-    args: 'storybook-mcp-api --static ./storybook-static --port 6006',
-    env: {
-      NODE_ENV: 'production'
+#### nginx Reverse Proxy (with MCP/SSE support)
+
+```nginx
+upstream storybook_api {
+    server 127.0.0.1:6006;
+    keepalive 64;
+}
+
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    # All requests
+    location / {
+        proxy_pass http://storybook_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
     }
-  }]
-};
+
+    # SSE endpoint - disable buffering!
+    location /sse {
+        proxy_pass http://storybook_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+    }
+}
 ```
 
-### Fully Static (No Node.js Server)
+---
+
+### Option 2: Pure Static (No Node.js - REST only)
 
 Generate static JSON API files that can be served by **nginx, Apache, S3, or any CDN** - no Node.js required!
 
-#### Option 1: Integrate into Build (Recommended)
+**Features:**
+- ✅ Storybook UI (pre-built)
+- ✅ REST API (static JSON files)
+- ❌ MCP Protocol (not available - requires server)
+- ✅ Zero runtime dependencies
+- ✅ CDN/S3 compatible
+
+#### Integrate into Build (Recommended)
 
 Add to your project's `package.json`:
 
@@ -271,13 +319,13 @@ npm run build-storybook
 
 The API files are generated automatically after the build!
 
-#### Option 2: Manual Generation
+#### Manual Generation
 
 ```bash
 # 1. Build Storybook
 npx storybook build
 
-# 2. Generate static API files
+# 2. Generate static API files (auto-detects build directory)
 npx storybook-mcp-api --generate-api
 ```
 

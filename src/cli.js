@@ -59,12 +59,21 @@ function detectStorybookOutputDir(projectDir) {
 /**
  * Generate static API JSON files inside Storybook build
  * This allows serving everything via nginx/CDN without a Node.js server
+ * Uses the same tool handlers as dev mode for full documentation
  */
 async function generateStaticApi(staticDir, projectDir) {
   const indexJsonPath = path.join(staticDir, 'index.json');
   if (!fs.existsSync(indexJsonPath)) {
     throw new Error(`No index.json found in ${staticDir}`);
   }
+
+  // Create tool handlers to get full documentation (same as dev mode)
+  const { createToolHandlers } = require('./server');
+  const handlers = createToolHandlers({
+    storybookUrl: 'unused', // We use staticDir instead
+    projectDir,
+    staticDir,
+  });
 
   // Create api directory
   const apiDir = path.join(staticDir, 'api');
@@ -81,7 +90,7 @@ async function generateStaticApi(staticDir, projectDir) {
   const apiInfo = {
     success: true,
     name: 'Storybook MCP API',
-    version: '1.3.0',
+    version: '1.4.0',
     mode: 'static',
     endpoints: {
       'GET /api': 'This documentation',
@@ -94,22 +103,10 @@ async function generateStaticApi(staticDir, projectDir) {
   fs.writeFileSync(path.join(apiDir, 'index.json'), JSON.stringify(apiInfo, null, 2));
   console.log(chalk.green('  ✓') + ' Generated /api/index.json');
 
-  // Generate /api/stories.json (all stories)
-  const storiesList = {
-    success: true,
-    count: stories.length,
-    stories: stories.map(entry => ({
-      id: entry.id,
-      name: entry.name,
-      title: entry.title,
-      kind: entry.kind || entry.title,
-      importPath: entry.importPath,
-      tags: entry.tags || [],
-      type: entry.type,
-    })),
-  };
-  fs.writeFileSync(path.join(apiDir, 'stories.json'), JSON.stringify(storiesList, null, 2));
-  console.log(chalk.green('  ✓') + ` Generated /api/stories.json (${stories.length} stories)`);
+  // Generate /api/stories.json (all stories) - use handler for consistency
+  const storiesResult = await handlers.listStories({});
+  fs.writeFileSync(path.join(apiDir, 'stories.json'), JSON.stringify(storiesResult, null, 2));
+  console.log(chalk.green('  ✓') + ` Generated /api/stories.json (${storiesResult.count} stories)`);
 
   // Create stories and docs subdirectories
   const storiesDir = path.join(apiDir, 'stories');
@@ -117,7 +114,7 @@ async function generateStaticApi(staticDir, projectDir) {
   if (!fs.existsSync(storiesDir)) fs.mkdirSync(storiesDir, { recursive: true });
   if (!fs.existsSync(docsDir)) fs.mkdirSync(docsDir, { recursive: true });
 
-  // Generate individual story and docs files
+  // Generate individual story and docs files using handlers (full documentation)
   let storyCount = 0;
   let docsCount = 0;
 
@@ -125,34 +122,14 @@ async function generateStaticApi(staticDir, projectDir) {
     const storyId = entry.id;
     const safeId = storyId.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-    // Generate /api/stories/{storyId}.json
-    const storyData = {
-      success: true,
-      story: {
-        id: entry.id,
-        name: entry.name,
-        title: entry.title,
-        kind: entry.kind || entry.title,
-        importPath: entry.importPath,
-        tags: entry.tags || [],
-        type: entry.type,
-      },
-    };
-    fs.writeFileSync(path.join(storiesDir, `${safeId}.json`), JSON.stringify(storyData, null, 2));
+    // Generate /api/stories/{storyId}.json - uses handler for full details
+    const storyResult = await handlers.getStory({ storyId });
+    fs.writeFileSync(path.join(storiesDir, `${safeId}.json`), JSON.stringify(storyResult, null, 2));
     storyCount++;
 
-    // Generate /api/docs/{storyId}.json
-    const docsData = {
-      success: true,
-      docs: {
-        storyId: entry.id,
-        title: entry.title,
-        name: entry.name,
-        type: entry.type,
-        importPath: entry.importPath,
-      },
-    };
-    fs.writeFileSync(path.join(docsDir, `${safeId}.json`), JSON.stringify(docsData, null, 2));
+    // Generate /api/docs/{storyId}.json - uses handler for full documentation
+    const docsResult = await handlers.getStoryDocs({ storyId });
+    fs.writeFileSync(path.join(docsDir, `${safeId}.json`), JSON.stringify(docsResult, null, 2));
     docsCount++;
   }
 

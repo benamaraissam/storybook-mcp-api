@@ -1,6 +1,6 @@
 {
   "name": "storybook-mcp-api",
-  "version": "1.4.1",
+  "version": "1.4.3",
   "description": "Unified Storybook API Server - REST API + MCP protocol on a single port",
   "main": "src/index.js",
   "bin": {
